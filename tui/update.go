@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"secure-chat/crypto"
 
@@ -120,12 +121,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyEnter {
 				text := m.Input.Value()
 				if text != "" {
-					m.Messages = append(m.Messages, fmt.Sprintf("You: %s", text))
+					timestamp := time.Now().Format("15:04")
+					m.Messages = append(m.Messages, fmt.Sprintf("[%s] 👤 You: %s", timestamp, text))
+					m.MessageCount++
 					m.Input.SetValue("")
 					m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 					m.Timeline.GotoBottom()
 					if m.Cipher != nil {
-						cipherText, _ := m.Cipher.Encrypt([]byte(text))
+						var payload []byte
+						if m.RoomID != "" {
+							payload = []byte(fmt.Sprintf("MSG:%s:%s", m.Identity.UniqueID[:3], text))
+						} else {
+							payload = []byte(text)
+						}
+						cipherText, _ := m.Cipher.Encrypt(payload)
 						if m.RoomID != "" {
 							m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
 						} else {
@@ -191,6 +200,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tickMsg:
+		if m.Cipher != nil && m.RoomID == "" && m.Session.PeerID != "" {
+			pingPayload := []byte(fmt.Sprintf("PING:%d", time.Now().UnixNano()))
+			cipherText, _ := m.Cipher.Encrypt(pingPayload)
+			select {
+			case m.Session.Outgoing <- cipherText:
+			default:
+			}
+		}
+		return m, tickCmd()
+
 	case peerMessageMsg:
 		if bytes.Equal(msg, []byte("SYS:DISCONNECT")) {
 			m.Messages = append(m.Messages, "[SYS] Peer has disconnected.")
@@ -233,8 +253,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.Messages = append(m.Messages, "[SYS] Download command added to sidebar!")
 						m.PendingFile = filename
 					}
+				} else if bytes.HasPrefix(decrypted, []byte("PING:")) {
+					pongPayload := []byte(strings.Replace(string(decrypted), "PING:", "PONG:", 1))
+					cipherText, _ := m.Cipher.Encrypt(pongPayload)
+					select {
+					case m.Session.Outgoing <- cipherText:
+					default:
+					}
+				} else if bytes.HasPrefix(decrypted, []byte("PONG:")) {
+					parts := bytes.Split(decrypted, []byte(":"))
+					if len(parts) == 2 {
+						var sentNano int64
+						fmt.Sscanf(string(parts[1]), "%d", &sentNano)
+						if sentNano > 0 {
+							latency := time.Now().UnixNano() - sentNano
+							m.Ping = fmt.Sprintf("%dms", latency/1e6)
+						}
+					}
+				} else if bytes.HasPrefix(decrypted, []byte("MSG:")) {
+					parts := bytes.SplitN(decrypted, []byte(":"), 3)
+					if len(parts) == 3 {
+						m.MessageCount++
+						senderName := "Peer_" + string(parts[1])
+						timestamp := time.Now().Format("15:04")
+						m.Messages = append(m.Messages, fmt.Sprintf("[%s] 👤 %s: %s", timestamp, senderName, string(parts[2])))
+					}
 				} else {
-					m.Messages = append(m.Messages, fmt.Sprintf("Peer: %s", string(decrypted)))
+					m.MessageCount++
+					senderName := "Peer"
+					if len(m.Session.PeerID) >= 3 {
+						senderName = "Peer_" + m.Session.PeerID[:3]
+					}
+					timestamp := time.Now().Format("15:04")
+					m.Messages = append(m.Messages, fmt.Sprintf("[%s] 👤 %s: %s", timestamp, senderName, string(decrypted)))
 				}
 			} else {
 				m.Messages = append(m.Messages, "[SYS] Received malformed encrypted payload")

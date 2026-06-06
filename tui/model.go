@@ -3,6 +3,7 @@ package tui
 import (
 	"secure-chat/crypto"
 	"secure-chat/manager"
+	"time"
 
 	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -38,9 +39,19 @@ type Model struct {
 	
 	RoomID      string
 	RoomKey     []byte
+
+	MessageCount int
+	Ping         string
 }
 
 type peerMessageMsg []byte
+type tickMsg time.Time
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
 
 func waitForMessage(sub chan []byte) tea.Cmd {
 	return func() tea.Msg {
@@ -74,5 +85,5 @@ func InitialModel(sess *manager.Session, hub *manager.Hub, id *crypto.Identity, 
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.FilePicker.Init(), waitForMessage(m.Session.Incoming))
+	return tea.Batch(textinput.Blink, m.FilePicker.Init(), waitForMessage(m.Session.Incoming), tickCmd())
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -33,18 +34,33 @@ func (m Model) View() string {
 		leftCol = StyleTimeline.Width(int(float64(m.Width)*0.70) - 2).Render("\n  Paste Join Code:\n  " + m.Input.View())
 	}
 
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	ramMB := float64(mem.Alloc) / 1024 / 1024
+
+	pingStr := m.Ping
+	if pingStr == "" {
+		if m.RoomID != "" {
+			pingStr = "N/A"
+		} else {
+			pingStr = "..."
+		}
+	}
+
+	metrics := fmt.Sprintf("Volatile RAM: %.1f MB\nKey Ratchet:  #%04d\nLive Ping:    %s", ramMB, m.MessageCount, pingStr)
+
 	var telemetry string
 	if m.RoomID != "" {
-		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nRoom:\n%s\n\nCrypto: ChaCha20-Poly1305\n\n[Ctrl+Q] Panic Exit\n[Ctrl+F] Send File\n[Ctrl+Y] Copy ID\n[Ctrl+L] Leave Room",
-			m.Identity.UniqueID, m.RoomID)
+		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nRoom:\n%s\n\nCrypto: ChaCha20-Poly1305\n%s\n\n[Ctrl+Q] Panic Exit\n[Ctrl+F] Send File\n[Ctrl+Y] Copy ID\n[Ctrl+L] Leave Room",
+			m.Identity.UniqueID, m.RoomID, metrics)
 	} else {
-		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nPeer:\n%s\n\nCrypto: ChaCha20-Poly1305\n\n[Ctrl+Q] Panic Exit\n[Ctrl+F] Send File\n[Ctrl+Y] Copy ID\n[Ctrl+R] Create Room\n[Ctrl+J] Join Room",
+		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nPeer:\n%s\n\nCrypto: ChaCha20-Poly1305\n%s\n\n[Ctrl+Q] Panic Exit\n[Ctrl+F] Send File\n[Ctrl+Y] Copy ID\n[Ctrl+R] Create Room\n[Ctrl+J] Join Room",
 			m.Identity.UniqueID, func() string {
 				if m.Session.PeerID != "" {
 					return m.Session.PeerID
 				}
 				return "Waiting for peer..."
-			}())
+			}(), metrics)
 	}
 
 	if m.PendingFile != "" {
