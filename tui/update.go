@@ -41,13 +41,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Timeline.GotoBottom()
 				} else if r == 'n' || r == 'N' {
 					m.Messages = append(m.Messages, "[SYS] 🚨 FINGERPRINT MISMATCH! MITM DETECTED! 🚨")
-					m.Messages = append(m.Messages, "[SYS] Disconnecting immediately.")
+					m.Messages = append(m.Messages, "[SYS] Application terminating to protect session.")
 					m.State = StateChat
 					m.Session.Outgoing <- []byte("SYS:DISCONNECT")
 					m.Cipher = nil
 					m.Session.PeerID = ""
 					m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 					m.Timeline.GotoBottom()
+					return m, tea.Quit
 				}
 			}
 			return m, nil
@@ -99,6 +100,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			roomKey := make([]byte, 32)
 			rand.Read(roomKey)
 			roomID := fmt.Sprintf("ROOM_%s", m.Identity.UniqueID[:8])
+			m.Hub.CreateRoom(roomID) // Register room in Hub with 10 min TTL
 			expiry := time.Now().Add(10 * time.Minute).Unix()
 			joinCode := fmt.Sprintf("%s-%x-%d", roomID, roomKey, expiry)
 			
@@ -163,6 +165,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
 						} else {
 							m.Session.Outgoing <- cipherText
+							m.Cipher.RatchetKey()
 						}
 					}
 				}
@@ -213,8 +216,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.RoomKey = keyBytes
 							m.Cipher, _ = crypto.NewCipherEngine(keyBytes)
 							m.Session.PeerID = roomID // Block 1-to-1 pairings
-							m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
-							m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+							
+							errJoin := m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
+							if errJoin != nil {
+								m.Messages = append(m.Messages, "[SYS] 🚨 Invalid Join Code (Room no longer exists).")
+								m.RoomID = ""
+								m.RoomKey = nil
+								m.Cipher = nil
+								m.Session.PeerID = ""
+							} else {
+								m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+							}
 						} else {
 							m.Messages = append(m.Messages, "[SYS] Invalid Join Code (Key Length Error).")
 						}
@@ -235,6 +247,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Cipher != nil && m.RoomID == "" && m.Session.PeerID != "" {
 			pingPayload := []byte(fmt.Sprintf("PING:%d", time.Now().UnixNano()))
 			cipherText, _ := m.Cipher.Encrypt(pingPayload)
+			m.Cipher.RatchetKey()
 			select {
 			case m.Session.Outgoing <- cipherText:
 			default:
@@ -256,6 +269,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.Cipher == nil {
 			peerPub := []byte(msg)
+			if len(peerPub) != 32 {
+				m.Messages = append(m.Messages, "[SYS] 🚨 Invalid Peer Public Key Length. Connection aborted.")
+				m.Session.Outgoing <- []byte("SYS:DISCONNECT")
+				m.Cipher = nil
+				m.Session.PeerID = ""
+				m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+				m.Timeline.GotoBottom()
+				return m, tea.Quit
+			}
+			
 			sharedKey, err := crypto.DeriveSharedKey(m.Identity.PrivateKey, peerPub)
 			if err == nil {
 				m.Cipher, _ = crypto.NewCipherEngine(sharedKey)
@@ -276,6 +299,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			decrypted, err := m.Cipher.Decrypt([]byte(msg))
 			if err == nil {
+				if m.RoomID == "" {
+					m.Cipher.RatchetKey()
+				}
 				if bytes.HasPrefix(decrypted, []byte("FILE:")) {
 					parts := bytes.SplitN(decrypted, []byte(":"), 3)
 					if len(parts) == 3 {
@@ -292,6 +318,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if bytes.HasPrefix(decrypted, []byte("PING:")) {
 					pongPayload := []byte(strings.Replace(string(decrypted), "PING:", "PONG:", 1))
 					cipherText, _ := m.Cipher.Encrypt(pongPayload)
+					if m.RoomID == "" {
+						m.Cipher.RatchetKey()
+					}
 					select {
 					case m.Session.Outgoing <- cipherText:
 					default:
@@ -371,9 +400,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			
 			// Read file, encrypt, and send
 			uploadCmd := func() tea.Msg {
-				data, err := os.ReadFile(path)
-				if err != nil || len(data) > 10*1024*1024 { 
+				info, errStat := os.Stat(path)
+				if errStat != nil || info.Size() > 10*1024*1024 {
 					return fileUploadCompleteMsg{false, "[SYS] Upload failed: file too large or unreadable"}
+				}
+				data, err := os.ReadFile(path)
+				if err != nil { 
+					return fileUploadCompleteMsg{false, "[SYS] Upload failed: file unreadable"}
 				}
 				filename := filepath.Base(path)
 				payload := append([]byte("FILE:"+filename+":"), data...)
@@ -382,6 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
 				} else {
 					m.Session.Outgoing <- cipherText
+					m.Cipher.RatchetKey()
 				}
 				return fileUploadCompleteMsg{true, "[SYS] File securely transmitted!"}
 			}

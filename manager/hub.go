@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type Room struct {
@@ -145,6 +146,19 @@ func (h *Hub) DeleteFile(key string) {
 	delete(h.files, key)
 }
 
+// CreateRoom explicitly registers a room with a 10-minute expiration.
+func (h *Hub) CreateRoom(roomID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rooms[roomID] = NewRoom()
+
+	time.AfterFunc(10*time.Minute, func() {
+		h.mu.Lock()
+		delete(h.rooms, roomID)
+		h.mu.Unlock()
+	})
+}
+
 func (h *Hub) JoinRoom(roomID, sessionID string) error {
 	h.mu.RLock()
 	room, ok := h.rooms[roomID]
@@ -152,12 +166,7 @@ func (h *Hub) JoinRoom(roomID, sessionID string) error {
 	h.mu.RUnlock()
 
 	if !ok {
-		h.mu.Lock()
-		if _, exists := h.rooms[roomID]; !exists {
-			h.rooms[roomID] = NewRoom()
-		}
-		room = h.rooms[roomID]
-		h.mu.Unlock()
+		return fmt.Errorf("room expired or does not exist")
 	}
 
 	if !ok2 {

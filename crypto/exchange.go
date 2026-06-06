@@ -22,5 +22,13 @@ func DeriveSharedKey(privateKey []byte, peerPublicKey []byte) ([]byte, error) {
 		sharedSecret[i] = 0
 	}
 
-	return hash[:], nil
+	out := make([]byte, 32)
+	copy(out, hash[:])
+	
+	// Zero out the hash array from stack memory
+	for i := range hash {
+		hash[i] = 0
+	}
+
+	return out, nil
 }
