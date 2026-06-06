@@ -26,7 +26,7 @@ func (m Model) View() string {
 	headerBlock := StyleHeader.Width(m.Width - 2).Render(header)
 
 	var leftCol string
-	if m.State == StateChat {
+	if m.State == StateChat || m.State == StateAuthVerify {
 		leftCol = StyleTimeline.Width(int(float64(m.Width)*0.70) - 2).Render(m.Timeline.View())
 	} else if m.State == StateFilePicker {
 		leftCol = StyleTimeline.Width(int(float64(m.Width)*0.70) - 2).Render(m.FilePicker.View())
@@ -83,6 +83,8 @@ func (m Model) View() string {
 		prompt = StylePrompt.Render("📁 [FILE]: _ ")
 	} else if m.State == StateRoomJoin {
 		prompt = StylePrompt.Render("🔑 [JOIN]: _ ")
+	} else if m.State == StateAuthVerify {
+		prompt = StylePrompt.Render("🛡️ [VERIFY y/n]: _ ")
 	}
 	footer := StyleFooter.Render(lipgloss.JoinHorizontal(lipgloss.Left, prompt, m.Input.View()))
 

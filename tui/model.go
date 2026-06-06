@@ -17,6 +17,7 @@ const (
 	StateChat UIState = iota
 	StateFilePicker
 	StateRoomJoin
+	StateAuthVerify
 )
 
 type Model struct {

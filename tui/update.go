@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.State == StateAuthVerify {
+			if msg.Type == tea.KeyRunes {
+				r := msg.Runes[0]
+				if r == 'y' || r == 'Y' {
+					m.Messages = append(m.Messages, "[SYS] Fingerprint verified. Secure channel established!")
+					m.State = StateChat
+					m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+					m.Timeline.GotoBottom()
+				} else if r == 'n' || r == 'N' {
+					m.Messages = append(m.Messages, "[SYS] 🚨 FINGERPRINT MISMATCH! MITM DETECTED! 🚨")
+					m.Messages = append(m.Messages, "[SYS] Disconnecting immediately.")
+					m.State = StateChat
+					m.Session.Outgoing <- []byte("SYS:DISCONNECT")
+					m.Cipher = nil
+					m.Session.PeerID = ""
+					m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+					m.Timeline.GotoBottom()
+				}
+			}
+			return m, nil
+		}
+
 		if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyCtrlQ {
 			// Panic Exit
 			m.Identity.Wipe()
@@ -76,7 +99,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			roomKey := make([]byte, 32)
 			rand.Read(roomKey)
 			roomID := fmt.Sprintf("ROOM_%s", m.Identity.UniqueID[:8])
-			joinCode := fmt.Sprintf("%s-%x", roomID, roomKey)
+			expiry := time.Now().Add(10 * time.Minute).Unix()
+			joinCode := fmt.Sprintf("%s-%x-%d", roomID, roomKey, expiry)
 			
 			m.RoomID = roomID
 			m.RoomKey = roomKey
@@ -166,27 +190,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				code = strings.ReplaceAll(code, "\r", "")
 				code = strings.ReplaceAll(code, " ", "")
 				parts := strings.Split(code, "-")
-				if len(parts) == 2 {
+				if len(parts) == 3 {
 					roomID := parts[0]
 					keyHex := parts[1]
-					keyBytes, err := hex.DecodeString(keyHex)
-					if err == nil && len(keyBytes) == 32 {
-						if m.RoomID != "" {
-							m.Hub.LeaveRoom(m.RoomID, m.Identity.UniqueID)
-							m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Left previous Room %s", m.RoomID))
-						} else if m.Session.PeerID != "" {
-							m.Session.Outgoing <- []byte("SYS:DISCONNECT")
-							m.Messages = append(m.Messages, "[SYS] Disconnected from 1-to-1 peer.")
-						}
-
-						m.RoomID = roomID
-						m.RoomKey = keyBytes
-						m.Cipher, _ = crypto.NewCipherEngine(keyBytes)
-						m.Session.PeerID = roomID // Block 1-to-1 pairings
-						m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
-						m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+					expiryStr := parts[2]
+					
+					expiry, errParse := strconv.ParseInt(expiryStr, 10, 64)
+					if errParse == nil && time.Now().Unix() > expiry {
+						m.Messages = append(m.Messages, "[SYS] 🚨 Invalid Join Code (EXPIRED).")
 					} else {
-						m.Messages = append(m.Messages, "[SYS] Invalid Join Code (Key Length Error).")
+						keyBytes, err := hex.DecodeString(keyHex)
+						if err == nil && len(keyBytes) == 32 {
+							if m.RoomID != "" {
+								m.Hub.LeaveRoom(m.RoomID, m.Identity.UniqueID)
+								m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Left previous Room %s", m.RoomID))
+							} else if m.Session.PeerID != "" {
+								m.Session.Outgoing <- []byte("SYS:DISCONNECT")
+								m.Messages = append(m.Messages, "[SYS] Disconnected from 1-to-1 peer.")
+							}
+
+							m.RoomID = roomID
+							m.RoomKey = keyBytes
+							m.Cipher, _ = crypto.NewCipherEngine(keyBytes)
+							m.Session.PeerID = roomID // Block 1-to-1 pairings
+							m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
+							m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+						} else {
+							m.Messages = append(m.Messages, "[SYS] Invalid Join Code (Key Length Error).")
+						}
 					}
 				} else {
 					m.Messages = append(m.Messages, "[SYS] Invalid Join Code Format.")
@@ -228,7 +259,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sharedKey, err := crypto.DeriveSharedKey(m.Identity.PrivateKey, peerPub)
 			if err == nil {
 				m.Cipher, _ = crypto.NewCipherEngine(sharedKey)
-				m.Messages = append(m.Messages, "[SYS] Secure encrypted channel established!")
+				peerFingerprint := crypto.FingerprintPubKey(peerPub)
+				m.Messages = append(m.Messages, "[SYS] Cryptographic handshake completed.")
+				m.Messages = append(m.Messages, fmt.Sprintf("⚠️ VERIFY PEER FINGERPRINT: %s", peerFingerprint))
+				m.Messages = append(m.Messages, fmt.Sprintf("⚠️ YOUR FINGERPRINT: %s", m.Identity.Fingerprint()))
+				m.Messages = append(m.Messages, "Do the fingerprints match? [y/n]")
+				m.State = StateAuthVerify
 				if !m.Initiator {
 					m.Session.Outgoing <- m.Identity.PublicKey
 				}

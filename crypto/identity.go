@@ -59,3 +59,14 @@ func (id *Identity) Wipe() {
 	}
 	id.UniqueID = ""
 }
+
+// FingerprintPubKey returns an 8-character Base58 hash of a public key.
+func FingerprintPubKey(pubKey []byte) string {
+	hash := sha256.Sum256(pubKey)
+	return base58.Encode(hash[:])[:8]
+}
+
+// Fingerprint returns an 8-character Base58 hash of the public key for manual verification.
+func (id *Identity) Fingerprint() string {
+	return FingerprintPubKey(id.PublicKey)
+}
