@@ -15,6 +15,7 @@ type UIState int
 const (
 	StateChat UIState = iota
 	StateFilePicker
+	StateRoomJoin
 )
 
 type Model struct {
@@ -34,6 +35,9 @@ type Model struct {
 	Messages    []string
 	Initiator   bool
 	PendingFile string
+	
+	RoomID      string
+	RoomKey     []byte
 }
 
 type peerMessageMsg []byte

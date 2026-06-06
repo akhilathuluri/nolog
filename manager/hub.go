@@ -6,17 +6,30 @@ import (
 	"sync"
 )
 
+type Room struct {
+	mu       sync.RWMutex
+	sessions map[string]*Session
+}
+
+func NewRoom() *Room {
+	return &Room{
+		sessions: make(map[string]*Session),
+	}
+}
+
 // Hub manages active sessions securely in memory.
 type Hub struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	files    map[string][]byte
+	rooms    map[string]*Room
 }
 
 func NewHub() *Hub {
 	return &Hub{
 		sessions: make(map[string]*Session),
 		files:    make(map[string][]byte),
+		rooms:    make(map[string]*Room),
 	}
 }
 
@@ -34,6 +47,12 @@ func (h *Hub) Unregister(uniqueID string) {
 	if s, ok := h.sessions[uniqueID]; ok {
 		s.Close()
 		delete(h.sessions, uniqueID)
+	}
+	
+	for _, room := range h.rooms {
+		room.mu.Lock()
+		delete(room.sessions, uniqueID)
+		room.mu.Unlock()
 	}
 }
 
@@ -124,4 +143,61 @@ func (h *Hub) DeleteFile(key string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.files, key)
+}
+
+func (h *Hub) JoinRoom(roomID, sessionID string) error {
+	h.mu.RLock()
+	room, ok := h.rooms[roomID]
+	session, ok2 := h.sessions[sessionID]
+	h.mu.RUnlock()
+
+	if !ok {
+		h.mu.Lock()
+		if _, exists := h.rooms[roomID]; !exists {
+			h.rooms[roomID] = NewRoom()
+		}
+		room = h.rooms[roomID]
+		h.mu.Unlock()
+	}
+
+	if !ok2 {
+		return fmt.Errorf("session not found")
+	}
+
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	room.sessions[sessionID] = session
+	return nil
+}
+
+func (h *Hub) LeaveRoom(roomID, sessionID string) {
+	h.mu.RLock()
+	room, ok := h.rooms[roomID]
+	h.mu.RUnlock()
+	if ok {
+		room.mu.Lock()
+		delete(room.sessions, sessionID)
+		room.mu.Unlock()
+	}
+}
+
+func (h *Hub) Broadcast(roomID string, senderID string, payload []byte) {
+	h.mu.RLock()
+	room, ok := h.rooms[roomID]
+	h.mu.RUnlock()
+	
+	if !ok {
+		return
+	}
+
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	for id, sess := range room.sessions {
+		if id != senderID {
+			select {
+			case sess.Incoming <- payload:
+			default:
+			}
+		}
+	}
 }

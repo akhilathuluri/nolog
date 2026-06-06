@@ -2,6 +2,8 @@ package tui
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,6 +63,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Printf("%s", seq)
 		}
 
+		if msg.Type == tea.KeyCtrlR {
+			if m.RoomID != "" {
+				m.Hub.LeaveRoom(m.RoomID, m.Identity.UniqueID)
+				m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Left previous Room %s", m.RoomID))
+			} else if m.Session.PeerID != "" {
+				m.Session.Outgoing <- []byte("SYS:DISCONNECT")
+				m.Messages = append(m.Messages, "[SYS] Disconnected from 1-to-1 peer.")
+			}
+
+			roomKey := make([]byte, 32)
+			rand.Read(roomKey)
+			roomID := fmt.Sprintf("ROOM_%s", m.Identity.UniqueID[:8])
+			joinCode := fmt.Sprintf("%s-%x", roomID, roomKey)
+			
+			m.RoomID = roomID
+			m.RoomKey = roomKey
+			m.Cipher, _ = crypto.NewCipherEngine(roomKey)
+			m.Session.PeerID = roomID // Block 1-to-1 pairings
+			m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
+			
+			clipboard.WriteAll(joinCode)
+			seq := osc52.New(joinCode).String()
+			
+			m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Room %s created!", roomID))
+			m.Messages = append(m.Messages, "[SYS] Join Code copied to clipboard!")
+			m.Messages = append(m.Messages, fmt.Sprintf("Code: %s", joinCode[:30]))
+			m.Messages = append(m.Messages, fmt.Sprintf("      %s", joinCode[30:]))
+			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+			m.Timeline.GotoBottom()
+			return m, tea.Printf("%s", seq)
+		}
+
+		if msg.Type == tea.KeyCtrlJ {
+			m.State = StateRoomJoin
+			m.Input.Placeholder = "Paste Join Code..."
+			m.Input.SetValue("")
+			return m, nil
+		}
+
+		if msg.Type == tea.KeyCtrlL {
+			if m.RoomID != "" {
+				m.Hub.LeaveRoom(m.RoomID, m.Identity.UniqueID)
+				m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Left Room %s", m.RoomID))
+				m.RoomID = ""
+				m.RoomKey = nil
+				m.Session.PeerID = ""
+				m.Cipher = nil
+				m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+				m.Timeline.GotoBottom()
+			}
+			return m, nil
+		}
+
 		if m.State == StateChat {
 			if msg.Type == tea.KeyEnter {
 				text := m.Input.Value()
@@ -71,7 +126,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Timeline.GotoBottom()
 					if m.Cipher != nil {
 						cipherText, _ := m.Cipher.Encrypt([]byte(text))
-						m.Session.Outgoing <- cipherText
+						if m.RoomID != "" {
+							m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
+						} else {
+							m.Session.Outgoing <- cipherText
+						}
 					}
 				}
 				return m, nil
@@ -83,6 +142,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.State == StateFilePicker {
 			if msg.Type == tea.KeyEsc {
 				m.State = StateChat
+				return m, nil
+			}
+		} else if m.State == StateRoomJoin {
+			if msg.Type == tea.KeyEsc {
+				m.State = StateChat
+				m.Input.Placeholder = "Type a message..."
+				return m, nil
+			}
+			if msg.Type == tea.KeyEnter {
+				code := m.Input.Value()
+				code = strings.TrimSpace(code)
+				code = strings.ReplaceAll(code, "\n", "")
+				code = strings.ReplaceAll(code, "\r", "")
+				code = strings.ReplaceAll(code, " ", "")
+				parts := strings.Split(code, "-")
+				if len(parts) == 2 {
+					roomID := parts[0]
+					keyHex := parts[1]
+					keyBytes, err := hex.DecodeString(keyHex)
+					if err == nil && len(keyBytes) == 32 {
+						if m.RoomID != "" {
+							m.Hub.LeaveRoom(m.RoomID, m.Identity.UniqueID)
+							m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Left previous Room %s", m.RoomID))
+						} else if m.Session.PeerID != "" {
+							m.Session.Outgoing <- []byte("SYS:DISCONNECT")
+							m.Messages = append(m.Messages, "[SYS] Disconnected from 1-to-1 peer.")
+						}
+
+						m.RoomID = roomID
+						m.RoomKey = keyBytes
+						m.Cipher, _ = crypto.NewCipherEngine(keyBytes)
+						m.Session.PeerID = roomID // Block 1-to-1 pairings
+						m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
+						m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+					} else {
+						m.Messages = append(m.Messages, "[SYS] Invalid Join Code (Key Length Error).")
+					}
+				} else {
+					m.Messages = append(m.Messages, "[SYS] Invalid Join Code Format.")
+				}
+				m.State = StateChat
+				m.Input.Placeholder = "Type a message..."
+				m.Input.SetValue("")
+				m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+				m.Timeline.GotoBottom()
 				return m, nil
 			}
 		}
@@ -163,7 +267,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Timeline.GotoBottom()
 	}
 
-	if m.State == StateChat {
+	if m.State == StateChat || m.State == StateRoomJoin {
 		m.Input, cmd = m.Input.Update(msg)
 		cmds = append(cmds, cmd)
 		m.Timeline, cmd = m.Timeline.Update(msg)
@@ -187,8 +291,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				filename := filepath.Base(path)
 				payload := append([]byte("FILE:"+filename+":"), data...)
 				cipherText, _ := m.Cipher.Encrypt(payload)
-				m.Session.Outgoing <- cipherText
-				return fileUploadCompleteMsg{true, "[SYS] File securely transmitted to peer!"}
+				if m.RoomID != "" {
+					m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
+				} else {
+					m.Session.Outgoing <- cipherText
+				}
+				return fileUploadCompleteMsg{true, "[SYS] File securely transmitted!"}
 			}
 			cmds = append(cmds, uploadCmd)
 		}
