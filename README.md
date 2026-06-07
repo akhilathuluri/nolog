@@ -8,12 +8,15 @@ Stealth Engine is a high-performance, **Zero-Knowledge**, End-to-End Encrypted (
 * **Military-Grade Cryptography**: 
   * **ChaCha20-Poly1305** Authenticated Encryption with Associated Data (AEAD).
   * **X25519** Elliptic-Curve Diffie-Hellman Key Exchange.
-  * **HKDF Hash Ratcheting**: Perfect Forward Secrecy ensures past messages cannot be decrypted if keys are compromised.
+  * **Ed25519 Public-Key Signatures**: Cryptographic guarantees against Identity Spoofing.
+  * **Split TX/RX Session Keys**: Independent transmit and receive keys for flawless bidirectional synchronization.
+  * **Manual DH Rekey (Ctrl+K)**: True Post-Compromise Security. Instantly heal your session with a fresh Diffie-Hellman exchange.
 * **Man-In-The-Middle (MITM) Protection**: Out-of-band QR code fingerprint verification for 1-to-1 connections.
-* **Replay Attack Immunity**: Millisecond timestamp-based AAD sequence validation.
+* **Replay Attack Immunity**: Millisecond timestamp-based AAD sequence validation combined with a strictly tracked SHA-256 duplicate cache.
 * **Group Chat Rooms**: Fully decentralized, cryptographically secure 1-to-N broadcasting using 256-bit symmetric Room Keys.
-* **Ephemeral File Sharing**: Secure, in-memory N-to-N file sharing up to 10MB using zero-knowledge encrypted blobs over SCP. (Files auto-purge after 10 minutes).
-* **Live Telemetry**: Real-time dashboard showing Ping (latency), memory consumption (RAM), and active Key Ratchets.
+* **Secure File Sharing**: In-memory N-to-N file sharing over SCP using unpredictable, one-time cryptographic `Upload Tokens`. 
+* **Server Resource Hardening**: Strict global memory quotas (250MB), 1000 session caps, and active file limits to prevent DoS/OOM attacks.
+* **Encrypted Telemetry**: The server inherently blocks plaintext logging, encrypting all local telemetry into a binary file using a volatile, single-use ChaCha20-Poly1305 boot key.
 * **Anti-Forensics**: All chat history and files live exclusively in volatile RAM. No databases, no logs, no persistence.
 * **Flexible Authentication**: Native SSH password middleware to deter brute-force attacks, configurable via `.env`, flags, or environment variables.
 
@@ -98,6 +101,16 @@ Because the TUI runs on the server, we use a custom **SCP-to-TUI pipeline** to a
 3. Open a *new, local terminal* on your computer and run the command to securely download the decrypted file directly to your hard drive.
 4. *Note: Uploaded files are automatically purged from the server's memory after 10 minutes.*
 
+### Reading Encrypted Server Logs
+For maximum stealth, all server connection telemetry is stripped from standard output and encrypted into a binary `stealth.log` file using a volatile `ChaCha20-Poly1305` key printed uniquely upon each server boot. 
+
+To decrypt and view these logs as an administrator, pass the printed 64-character hex key via the `--read-logs` flag:
+```bash
+./secure-chat.exe --read-logs <Your_64_Character_Hex_Key>
+```
+
+---
+
 ## 🌍 Production Deployment
 
 Stealth Engine is a lightweight Go binary, meaning it can be deployed almost anywhere with minimal overhead.
@@ -170,7 +183,8 @@ Stealth Engine is designed under the assumption that the server is compromised o
 1. **Zero-Knowledge Routing**: The server's `Hub` only routes `[]byte` arrays. It does not possess any private keys and cannot inspect or alter payloads.
 2. **Key Wiping**: Shared secrets and private keys are aggressively zeroed from memory the millisecond they are no longer needed.
 3. **Session Purging**: When a user disconnects or hits `Ctrl+Q` (Panic Exit), all their cipher engines, session pipes, and identities are instantly destroyed.
-4. **Transport Layer Security**: The connection between the user's terminal and the server is encrypted via standard OpenSSH.
+4. **Encrypted Telemetry**: All standard stdout logging is completely blocked. Administrative logs are scrambled into binary ciphertext via a volatile key generated on boot.
+5. **Transport Layer Security**: The connection between the user's terminal and the server is encrypted via standard OpenSSH.
 
 ### Disclaimer
 *This software is intended for educational purposes. While it implements industry-standard cryptography, it has not undergone a formal third-party security audit. Use at your own risk.*

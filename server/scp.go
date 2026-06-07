@@ -78,19 +78,27 @@ func (h HubWriteHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 func (h HubWriteHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
 	info := scp.GetInfo(s.Command())
-	// Expected format: upload_<UniqueID>
+	// Expected format: upload_<UploadToken>
 	if !strings.HasPrefix(info.Path, "upload_") {
-		return 0, fmt.Errorf("invalid destination path: must be upload_<UniqueID>")
+		return 0, fmt.Errorf("invalid destination path: must be upload_<UploadToken>")
 	}
 	
-	uid := strings.TrimPrefix(info.Path, "upload_")
-	sess, ok := h.Hub.Get(uid)
+	token := strings.TrimPrefix(info.Path, "upload_")
+	sess, ok := h.Hub.GetByUploadToken(token)
 	if !ok {
 		return 0, fmt.Errorf("session not found")
 	}
 
 	if entry.Size > 10*1024*1024 {
 		return 0, fmt.Errorf("file exceeds 10MB limit")
+	}
+
+	// Pre-check limits before allocating memory
+	if h.Hub.TotalMemoryUsed()+entry.Size > manager.MaxTotalMemory {
+		return 0, fmt.Errorf("server storage quota exceeded")
+	}
+	if h.Hub.GetFilesCount(sess.UniqueID) >= manager.MaxFilesPerSession {
+		return 0, fmt.Errorf("session file limit reached")
 	}
 
 	// Use LimitReader to physically prevent OOM if client lies about size

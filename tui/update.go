@@ -8,10 +8,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	
+	"crypto/ed25519"
+	"crypto/sha256"
+
+	"golang.org/x/crypto/curve25519"
 
 	"secure-chat/crypto"
 
 	"github.com/atotto/clipboard"
+	"github.com/mr-tron/base58"
 	"github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,7 +78,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.Type == tea.KeyCtrlU {
-			uploadCmd := fmt.Sprintf("scp -O -P 23234 <file> localhost:upload_%s", m.Identity.UniqueID)
+			uploadCmd := fmt.Sprintf("scp -O -P 23234 <file> localhost:upload_%s", m.Session.UploadToken)
 			clipboard.WriteAll(uploadCmd)
 			seq := osc52.New(uploadCmd).String()
 			m.Messages = append(m.Messages, "[SYS] SCP Upload command copied to clipboard!")
@@ -114,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			
 			m.RoomID = roomID
 			m.RoomKey = roomKey
-			m.Cipher, _ = crypto.NewCipherEngine(roomKey)
+			m.Cipher, _ = crypto.NewCipherEngine(roomKey, m.Initiator, true)
 			m.Session.PeerID = roomID // Block 1-to-1 pairings
 			m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
 			
@@ -134,6 +140,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.State = StateRoomJoin
 			m.Input.Placeholder = "Paste Join Code..."
 			m.Input.SetValue("")
+			return m, nil
+		}
+
+		if msg.Type == tea.KeyCtrlK {
+			if m.RoomID == "" && m.Cipher != nil && m.Session.PeerID != "" {
+				m.NextPriv = make([]byte, 32)
+				rand.Read(m.NextPriv)
+				m.NextPub, _ = curve25519.X25519(m.NextPriv, curve25519.Basepoint)
+				rekeyPayload := []byte(fmt.Sprintf("REKEY:%x", m.NextPub))
+				cipherText, _ := m.Cipher.Encrypt(rekeyPayload)
+				m.Session.Outgoing <- cipherText
+				m.Messages = append(m.Messages, "[SYS] 🔑 Initiating Diffie-Hellman Rekey...")
+				m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+				m.Timeline.GotoBottom()
+			}
 			return m, nil
 		}
 
@@ -164,7 +185,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.Cipher != nil {
 						var payload []byte
 						if m.RoomID != "" {
-							payload = []byte(fmt.Sprintf("MSG:%s:%s", m.Identity.UniqueID[:3], text))
+							signature := ed25519.Sign(m.Identity.SignKey, []byte(text))
+							payload = make([]byte, 0, 32+64+len(text))
+							payload = append(payload, m.Identity.VerifyKey...)
+							payload = append(payload, signature...)
+							payload = append(payload, []byte(text)...)
 						} else {
 							payload = []byte(text)
 						}
@@ -173,7 +198,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
 						} else {
 							m.Session.Outgoing <- cipherText
-							m.Cipher.RatchetKey()
 						}
 					}
 				}
@@ -213,7 +237,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 							m.RoomID = roomID
 							m.RoomKey = keyBytes
-							m.Cipher, _ = crypto.NewCipherEngine(keyBytes)
+							m.Cipher, _ = crypto.NewCipherEngine(keyBytes, m.Initiator, true)
 							m.Session.PeerID = roomID // Block 1-to-1 pairings
 							
 							errJoin := m.Hub.JoinRoom(roomID, m.Identity.UniqueID)
@@ -251,7 +275,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Cipher != nil && m.RoomID == "" && m.Session.PeerID != "" {
 			pingPayload := []byte(fmt.Sprintf("PING:%d", time.Now().UnixNano()))
 			cipherText, _ := m.Cipher.Encrypt(pingPayload)
-			m.Cipher.RatchetKey()
 			select {
 			case m.Session.Outgoing <- cipherText:
 			default:
@@ -284,7 +307,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			
 			sharedKey, err := crypto.DeriveSharedKey(m.Identity.PrivateKey, peerPub)
 			if err == nil {
-				m.Cipher, _ = crypto.NewCipherEngine(sharedKey)
+				m.Cipher, _ = crypto.NewCipherEngine(sharedKey, m.Initiator, false)
 				peerFingerprint := crypto.FingerprintPubKey(peerPub)
 				
 				buf := new(bytes.Buffer)
@@ -307,9 +330,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			decrypted, err := m.Cipher.Decrypt([]byte(msg))
 			if err == nil {
-				if m.RoomID == "" {
-					m.Cipher.RatchetKey()
-				}
 				if bytes.HasPrefix(decrypted, []byte("FILE:")) {
 					parts := bytes.SplitN(decrypted, []byte(":"), 3)
 					if len(parts) == 3 {
@@ -320,25 +340,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						rand.Read(fileIdBytes)
 						secureHex := hex.EncodeToString(fileIdBytes)
 						fileKey := "download_" + m.Identity.UniqueID + "_" + secureHex
-						m.Hub.StoreFile(fileKey, fileData)
 						
-						m.Messages = append(m.Messages, fmt.Sprintf("Peer sent file: %s", filename))
-						m.Messages = append(m.Messages, "[SYS] Download command added to sidebar!")
-						m.PendingFile = fmt.Sprintf("scp -O -P 23234 localhost:%s ./%s", fileKey, filename)
+						errStore := m.Hub.StoreFile(fileKey, fileData, m.Identity.UniqueID)
+						if errStore != nil {
+							m.Messages = append(m.Messages, "[SYS] 🚨 Peer attempted to send a file, but your storage quota is full!")
+						} else {
+							m.Messages = append(m.Messages, fmt.Sprintf("Peer sent file: %s", filename))
+							m.Messages = append(m.Messages, "[SYS] Download command added to sidebar!")
+							m.PendingFile = fmt.Sprintf("scp -O -P 23234 localhost:%s ./%s", fileKey, filename)
+						}
 					}
 				} else if bytes.HasPrefix(decrypted, []byte("PING:")) {
-					pongPayload := []byte(strings.Replace(string(decrypted), "PING:", "PONG:", 1))
-					cipherText, _ := m.Cipher.Encrypt(pongPayload)
-					if m.RoomID == "" {
-						m.Cipher.RatchetKey()
-					}
-					select {
-					case m.Session.Outgoing <- cipherText:
-					default:
+					parts := bytes.Split(decrypted, []byte(":"))
+					if len(parts) >= 2 {
+						pongPayload := []byte(fmt.Sprintf("PONG:%s", parts[1]))
+						cipherText, _ := m.Cipher.Encrypt(pongPayload)
+						select {
+						case m.Session.Outgoing <- cipherText:
+						default:
+						}
 					}
 				} else if bytes.HasPrefix(decrypted, []byte("PONG:")) {
 					parts := bytes.Split(decrypted, []byte(":"))
-					if len(parts) == 2 {
+					if len(parts) >= 2 {
 						var sentNano int64
 						fmt.Sscanf(string(parts[1]), "%d", &sentNano)
 						if sentNano > 0 {
@@ -346,13 +370,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.Ping = fmt.Sprintf("%dms", latency/1e6)
 						}
 					}
-				} else if bytes.HasPrefix(decrypted, []byte("MSG:")) {
-					parts := bytes.SplitN(decrypted, []byte(":"), 3)
-					if len(parts) == 3 {
-						m.MessageCount++
-						senderName := "Peer_" + string(parts[1])
-						timestamp := time.Now().Format("15:04")
-						m.Messages = append(m.Messages, fmt.Sprintf("[%s] 👤 %s: %s", timestamp, senderName, string(parts[2])))
+				} else if bytes.HasPrefix(decrypted, []byte("REKEY:")) {
+					parts := bytes.Split(decrypted, []byte(":"))
+					if len(parts) == 2 {
+						peerNextPub, _ := hex.DecodeString(string(parts[1]))
+						if len(peerNextPub) == 32 {
+							m.NextPriv = make([]byte, 32)
+							rand.Read(m.NextPriv)
+							m.NextPub, _ = curve25519.X25519(m.NextPriv, curve25519.Basepoint)
+							
+							rekeyAck := []byte(fmt.Sprintf("REKEY_ACK:%x", m.NextPub))
+							cipherText, _ := m.Cipher.Encrypt(rekeyAck)
+							m.Session.Outgoing <- cipherText
+							
+							shared, _ := crypto.DeriveSharedKey(m.NextPriv, peerNextPub)
+							m.Cipher.Rekey(shared, m.Initiator, false)
+							m.Messages = append(m.Messages, "[SYS] 🔐 Session keys rolled successfully (Rekey ACK).")
+						}
+					}
+				} else if bytes.HasPrefix(decrypted, []byte("REKEY_ACK:")) {
+					parts := bytes.Split(decrypted, []byte(":"))
+					if len(parts) == 2 && m.NextPriv != nil {
+						peerNextPub, _ := hex.DecodeString(string(parts[1]))
+						if len(peerNextPub) == 32 {
+							shared, _ := crypto.DeriveSharedKey(m.NextPriv, peerNextPub)
+							m.Cipher.Rekey(shared, m.Initiator, false)
+							m.Messages = append(m.Messages, "[SYS] 🔐 Session keys rolled successfully (Rekey OK).")
+							m.NextPriv = nil
+						}
+					}
+				} else if m.RoomID != "" {
+					if len(decrypted) > 96 {
+						pubKey := decrypted[:32]
+						signature := decrypted[32:96]
+						textBytes := decrypted[96:]
+
+						if ed25519.Verify(pubKey, textBytes, signature) {
+							hash := sha256.Sum256(pubKey)
+							uid := base58.Encode(hash[:])
+							
+							m.MessageCount++
+							senderName := "Peer_" + uid[:3]
+							timestamp := time.Now().Format("15:04")
+							m.Messages = append(m.Messages, fmt.Sprintf("[%s] 👤 %s: %s", timestamp, senderName, string(textBytes)))
+						} else {
+							m.Messages = append(m.Messages, "[SYS] 🚨 Dropped room message with invalid signature!")
+						}
+					} else {
+						m.Messages = append(m.Messages, "[SYS] 🚨 Dropped malformed room message.")
 					}
 				} else {
 					m.MessageCount++
@@ -391,7 +456,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
 		} else {
 			m.Session.Outgoing <- cipherText
-			m.Cipher.RatchetKey()
 		}
 		
 		// Parse the filename from the payload to show in UI

@@ -2,11 +2,14 @@ package manager
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 // Session represents a connected user's ephemeral session.
 type Session struct {
-	UniqueID string
+	UniqueID    string
+	UploadToken string
 	
 	// Channels for routing messages from/to the peer
 	Incoming chan []byte
@@ -23,13 +26,19 @@ type Session struct {
 // NewSession creates a new session.
 func NewSession(uniqueID string) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
+	
+	tokenBytes := make([]byte, 16)
+	rand.Read(tokenBytes)
+	tokenHex := hex.EncodeToString(tokenBytes)
+	
 	return &Session{
-		UniqueID: uniqueID,
-		Incoming: make(chan []byte, 100),
-		Outgoing: make(chan []byte, 100),
-		Uploads:  make(chan []byte, 10),
-		ctx:      ctx,
-		cancel:   cancel,
+		UniqueID:    uniqueID,
+		UploadToken: tokenHex,
+		Incoming:    make(chan []byte, 100),
+		Outgoing:    make(chan []byte, 100),
+		Uploads:     make(chan []byte, 10),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 

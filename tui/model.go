@@ -41,6 +41,9 @@ type Model struct {
 	RoomID      string
 	RoomKey     []byte
 
+	NextPriv []byte
+	NextPub  []byte
+
 	MessageCount int
 	Ping         string
 }

@@ -14,6 +14,11 @@ import (
 
 func TeaHandler(hub *manager.Hub) bubbletea.Handler {
 	return func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+		if hub.SessionCount() >= manager.MaxSessions {
+			log.Println("Connection rejected: Max sessions reached")
+			return nil, nil
+		}
+		
 		id, err := crypto.GenerateIdentity()
 		if err != nil {
 			log.Println("Error generating identity:", err)

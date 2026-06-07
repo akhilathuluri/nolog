@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"io"
 
+	"crypto/ed25519"
+
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/curve25519"
 )
 
-// Identity represents an ephemeral X25519 identity.
+// Identity represents an ephemeral X25519 and Ed25519 identity.
 type Identity struct {
-	PrivateKey []byte
-	PublicKey  []byte
+	PrivateKey []byte             // X25519
+	PublicKey  []byte             // X25519
+	SignKey    ed25519.PrivateKey // Ed25519
+	VerifyKey  ed25519.PublicKey  // Ed25519
 	UniqueID   string
 }
 
@@ -29,8 +33,14 @@ func GenerateIdentity() (*Identity, error) {
 		return nil, fmt.Errorf("failed to generate public key: %w", err)
 	}
 
-	// Hash public key with SHA-256
-	hash := sha256.Sum256(publicKey)
+	// Generate Ed25519 Keypair for signing room messages
+	verifyKey, signKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate signing key: %w", err)
+	}
+
+	// Hash Ed25519 verify key with SHA-256 to create the identity
+	hash := sha256.Sum256(verifyKey)
 
 	// Encode with Base58 for the Unique ID
 	uniqueID := base58.Encode(hash[:])
@@ -38,6 +48,8 @@ func GenerateIdentity() (*Identity, error) {
 	return &Identity{
 		PrivateKey: privateKey,
 		PublicKey:  publicKey,
+		SignKey:    signKey,
+		VerifyKey:  verifyKey,
 		UniqueID:   uniqueID,
 	}, nil
 }
@@ -55,6 +67,16 @@ func (id *Identity) Wipe() {
 	if id.PublicKey != nil {
 		for i := range id.PublicKey {
 			id.PublicKey[i] = 0
+		}
+	}
+	if id.SignKey != nil {
+		for i := range id.SignKey {
+			id.SignKey[i] = 0
+		}
+	}
+	if id.VerifyKey != nil {
+		for i := range id.VerifyKey {
+			id.VerifyKey[i] = 0
 		}
 	}
 	id.UniqueID = ""

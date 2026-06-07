@@ -49,7 +49,7 @@ func (m Model) View() string {
 
 	metrics := fmt.Sprintf("RAM:   %.1f MB\nROT:   #%04d\nPING:  %s", ramMB, m.MessageCount, pingStr)
 
-	uploadCmd := fmt.Sprintf("scp -P 23234 <file> localhost:upload_%s", m.Identity.UniqueID)
+	uploadCmd := fmt.Sprintf("scp -P 23234 <file> localhost:upload_%s", m.Session.UploadToken)
 	
 	var roomInfo string
 	if m.RoomID != "" {
@@ -72,7 +72,7 @@ func (m Model) View() string {
 	if m.RoomID != "" {
 		shortcutsContent += "[Ctrl+L] LEAVE ROOM\n"
 	} else {
-		shortcutsContent += "[Ctrl+R] CREATE ROOM  [Ctrl+J] JOIN ROOM\n"
+		shortcutsContent += "[Ctrl+R] CREATE ROOM  [Ctrl+J] JOIN ROOM\n[Ctrl+K] REKEY SESSION\n"
 	}
 	
 	uploadContent := "UPLOAD URL:\n" + uploadCmd

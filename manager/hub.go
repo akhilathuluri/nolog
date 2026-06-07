@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	MaxSessions        = 1000
+	MaxTotalMemory     = 250 * 1024 * 1024 // 250 MB
+	MaxFilesPerSession = 5
+)
+
 type Room struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -18,19 +24,27 @@ func NewRoom() *Room {
 	}
 }
 
+type FileEntry struct {
+	Data       []byte
+	UploaderID string
+}
+
 // Hub manages active sessions securely in memory.
 type Hub struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	files    map[string][]byte
-	rooms    map[string]*Room
+	mu             sync.RWMutex
+	sessions       map[string]*Session
+	files          map[string]*FileEntry
+	rooms          map[string]*Room
+	totalMemory    int64
+	sessionFiles   map[string]int
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		sessions: make(map[string]*Session),
-		files:    make(map[string][]byte),
-		rooms:    make(map[string]*Room),
+		sessions:     make(map[string]*Session),
+		files:        make(map[string]*FileEntry),
+		rooms:        make(map[string]*Room),
+		sessionFiles: make(map[string]int),
 	}
 }
 
@@ -49,6 +63,7 @@ func (h *Hub) Unregister(uniqueID string) {
 		s.Close()
 		delete(h.sessions, uniqueID)
 	}
+	delete(h.sessionFiles, uniqueID)
 	
 	for _, room := range h.rooms {
 		room.mu.Lock()
@@ -127,31 +142,87 @@ func (h *Hub) pipe(out chan []byte, in chan []byte, ctx1, ctx2 context.Context) 
 	}
 }
 
+// TotalMemoryUsed returns the total memory used by files.
+func (h *Hub) TotalMemoryUsed() int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.totalMemory
+}
+
+// GetFilesCount returns the number of files uploaded by a session.
+func (h *Hub) GetFilesCount(uniqueID string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.sessionFiles[uniqueID]
+}
+
 // StoreFile saves an ephemeral file payload in memory.
-func (h *Hub) StoreFile(key string, data []byte) {
+func (h *Hub) StoreFile(key string, data []byte, uploaderID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.files[key] = data
+
+	size := int64(len(data))
+	if h.totalMemory+size > MaxTotalMemory {
+		return fmt.Errorf("server storage quota exceeded")
+	}
+
+	if h.sessionFiles[uploaderID] >= MaxFilesPerSession {
+		return fmt.Errorf("session file limit reached")
+	}
+
+	h.files[key] = &FileEntry{Data: data, UploaderID: uploaderID}
+	h.totalMemory += size
+	h.sessionFiles[uploaderID]++
 
 	// Automatically garbage collect the file after 10 minutes if not downloaded
 	time.AfterFunc(10*time.Minute, func() {
 		h.DeleteFile(key)
 	})
+	return nil
 }
 
 // GetFile retrieves an ephemeral file payload from memory.
 func (h *Hub) GetFile(key string) ([]byte, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	data, ok := h.files[key]
-	return data, ok
+	entry, ok := h.files[key]
+	if !ok {
+		return nil, false
+	}
+	return entry.Data, true
 }
 
 // DeleteFile removes a file from memory.
 func (h *Hub) DeleteFile(key string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.files, key)
+	if entry, ok := h.files[key]; ok {
+		size := int64(len(entry.Data))
+		h.totalMemory -= size
+		if h.sessionFiles[entry.UploaderID] > 0 {
+			h.sessionFiles[entry.UploaderID]--
+		}
+		delete(h.files, key)
+	}
+}
+
+// GetByUploadToken retrieves a session by its UploadToken.
+func (h *Hub) GetByUploadToken(token string) (*Session, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, s := range h.sessions {
+		if s.UploadToken == token {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+// SessionCount returns the number of active sessions.
+func (h *Hub) SessionCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.sessions)
 }
 
 // CreateRoom explicitly registers a room with a 10-minute expiration.
