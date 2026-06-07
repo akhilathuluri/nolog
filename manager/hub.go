@@ -119,6 +119,9 @@ func (h *Hub) pipe(out chan []byte, in chan []byte, ctx1, ctx2 context.Context) 
 			case <-ctx2.Done():
 				return
 			case in <- msg:
+			case <-time.After(2 * time.Second):
+				// Peer is not reading messages (frozen or malicious). Drop connection.
+				return
 			}
 		}
 	}
@@ -129,6 +132,11 @@ func (h *Hub) StoreFile(key string, data []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.files[key] = data
+
+	// Automatically garbage collect the file after 10 minutes if not downloaded
+	time.AfterFunc(10*time.Minute, func() {
+		h.DeleteFile(key)
+	})
 }
 
 // GetFile retrieves an ephemeral file payload from memory.

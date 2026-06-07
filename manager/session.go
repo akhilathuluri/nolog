@@ -11,6 +11,7 @@ type Session struct {
 	// Channels for routing messages from/to the peer
 	Incoming chan []byte
 	Outgoing chan []byte
+	Uploads  chan []byte
 	
 	// Peer ID if connected
 	PeerID string
@@ -26,6 +27,7 @@ func NewSession(uniqueID string) *Session {
 		UniqueID: uniqueID,
 		Incoming: make(chan []byte, 100),
 		Outgoing: make(chan []byte, 100),
+		Uploads:  make(chan []byte, 10),
 		ctx:      ctx,
 		cancel:   cancel,
 	}

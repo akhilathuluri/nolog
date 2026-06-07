@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,12 +14,9 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mdp/qrterminal/v3"
 )
 
-type fileUploadCompleteMsg struct {
-	success bool
-	msg     string
-}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
@@ -75,18 +70,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Printf("%s", seq)
 		}
 
-		if msg.Type == tea.KeyCtrlG && m.PendingFile != "" {
-			scpCmd := fmt.Sprintf("scp -O -P 23234 localhost:download_%s ./%s", m.Identity.UniqueID, m.PendingFile)
-			
-			clipboard.WriteAll(scpCmd)
-			seq := osc52.New(scpCmd).String()
-			
-			m.Messages = append(m.Messages, "[SYS] SCP command copied to clipboard!")
+		if msg.Type == tea.KeyCtrlU {
+			uploadCmd := fmt.Sprintf("scp -O -P 23234 <file> localhost:upload_%s", m.Identity.UniqueID)
+			clipboard.WriteAll(uploadCmd)
+			seq := osc52.New(uploadCmd).String()
+			m.Messages = append(m.Messages, "[SYS] SCP Upload command copied to clipboard!")
 			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 			m.Timeline.GotoBottom()
-
 			return m, tea.Printf("%s", seq)
 		}
+
+		if msg.Type == tea.KeyCtrlD {
+			if m.PendingFile != "" {
+				clipboard.WriteAll(m.PendingFile)
+				seq := osc52.New(m.PendingFile).String()
+				m.Messages = append(m.Messages, "[SYS] SCP Download command copied to clipboard!")
+				if len(m.Messages) > 100 {
+					m.Messages = m.Messages[len(m.Messages)-100:]
+				}
+				m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+				m.Timeline.GotoBottom()
+				return m, tea.Printf("%s", seq)
+			}
+		}
+
 
 		if msg.Type == tea.KeyCtrlR {
 			if m.RoomID != "" {
@@ -171,15 +178,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if msg.Type == tea.KeyCtrlF {
-				m.State = StateFilePicker
-				return m, nil
-			}
-		} else if m.State == StateFilePicker {
-			if msg.Type == tea.KeyEsc {
-				m.State = StateChat
-				return m, nil
-			}
 		} else if m.State == StateRoomJoin {
 			if msg.Type == tea.KeyEsc {
 				m.State = StateChat
@@ -260,7 +258,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Messages = append(m.Messages, "[SYS] Peer has disconnected.")
 			m.Session.PeerID = ""
 			m.Cipher = nil
-			m.PendingFile = ""
 			m.Initiator = false // Reset initiator flag because any subsequent pair will be initiated by the peer
 			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 			m.Timeline.GotoBottom()
@@ -283,7 +280,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err == nil {
 				m.Cipher, _ = crypto.NewCipherEngine(sharedKey)
 				peerFingerprint := crypto.FingerprintPubKey(peerPub)
+				
+				buf := new(bytes.Buffer)
+				qrterminal.GenerateHalfBlock(peerFingerprint, qrterminal.L, buf)
+				
 				m.Messages = append(m.Messages, "[SYS] Cryptographic handshake completed.")
+				m.Messages = append(m.Messages, buf.String())
 				m.Messages = append(m.Messages, fmt.Sprintf("⚠️ VERIFY PEER FINGERPRINT: %s", peerFingerprint))
 				m.Messages = append(m.Messages, fmt.Sprintf("⚠️ YOUR FINGERPRINT: %s", m.Identity.Fingerprint()))
 				m.Messages = append(m.Messages, "Do the fingerprints match? [y/n]")
@@ -308,12 +310,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						filename := string(parts[1])
 						fileData := parts[2]
 						
-						fileKey := "download_" + m.Identity.UniqueID
+						fileIdBytes := make([]byte, 16)
+						rand.Read(fileIdBytes)
+						secureHex := hex.EncodeToString(fileIdBytes)
+						fileKey := "download_" + m.Identity.UniqueID + "_" + secureHex
 						m.Hub.StoreFile(fileKey, fileData)
 						
 						m.Messages = append(m.Messages, fmt.Sprintf("Peer sent file: %s", filename))
 						m.Messages = append(m.Messages, "[SYS] Download command added to sidebar!")
-						m.PendingFile = filename
+						m.PendingFile = fmt.Sprintf("scp -O -P 23234 localhost:%s ./%s", fileKey, filename)
 					}
 				} else if bytes.HasPrefix(decrypted, []byte("PING:")) {
 					pongPayload := []byte(strings.Replace(string(decrypted), "PING:", "PONG:", 1))
@@ -355,16 +360,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.Messages = append(m.Messages, "[SYS] Received malformed encrypted payload")
 			}
+			
+			if len(m.Messages) > 100 {
+				m.Messages = m.Messages[len(m.Messages)-100:]
+			}
 			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 			m.Timeline.GotoBottom()
 		}
 		return m, waitForMessage(m.Session.Incoming)
 
-	case fileUploadCompleteMsg:
-		m.Messages = append(m.Messages, msg.msg)
+	case fileUploadMsg:
+		cipherText, _ := m.Cipher.Encrypt([]byte(msg))
+		if m.RoomID != "" {
+			m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
+		} else {
+			m.Session.Outgoing <- cipherText
+			m.Cipher.RatchetKey()
+		}
+		
+		// Parse the filename from the payload to show in UI
+		parts := bytes.SplitN([]byte(msg), []byte(":"), 3)
+		if len(parts) >= 2 {
+			filename := string(parts[1])
+			m.Messages = append(m.Messages, fmt.Sprintf("[SYS] File '%s' securely transmitted!", filename))
+		} else {
+			m.Messages = append(m.Messages, "[SYS] File securely transmitted!")
+		}
+		
 		m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 		m.Timeline.GotoBottom()
-		return m, nil
+		return m, waitForUpload(m.Session.Uploads)
 
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
@@ -376,8 +401,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		
 		m.Timeline.Width = int(float64(m.Width)*0.70) - 4
 		m.Timeline.Height = contentHeight
-		
-		m.FilePicker.Height = contentHeight
 
 		m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
 		m.Timeline.GotoBottom()
@@ -388,39 +411,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		m.Timeline, cmd = m.Timeline.Update(msg)
 		cmds = append(cmds, cmd)
-	} else if m.State == StateFilePicker {
-		m.FilePicker, cmd = m.FilePicker.Update(msg)
-		cmds = append(cmds, cmd)
-		
-		if didSelect, path := m.FilePicker.DidSelectFile(msg); didSelect {
-			m.State = StateChat
-			m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Uploading %s...", filepath.Base(path)))
-			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
-			m.Timeline.GotoBottom()
-			
-			// Read file, encrypt, and send
-			uploadCmd := func() tea.Msg {
-				info, errStat := os.Stat(path)
-				if errStat != nil || info.Size() > 10*1024*1024 {
-					return fileUploadCompleteMsg{false, "[SYS] Upload failed: file too large or unreadable"}
-				}
-				data, err := os.ReadFile(path)
-				if err != nil { 
-					return fileUploadCompleteMsg{false, "[SYS] Upload failed: file unreadable"}
-				}
-				filename := filepath.Base(path)
-				payload := append([]byte("FILE:"+filename+":"), data...)
-				cipherText, _ := m.Cipher.Encrypt(payload)
-				if m.RoomID != "" {
-					m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)
-				} else {
-					m.Session.Outgoing <- cipherText
-					m.Cipher.RatchetKey()
-				}
-				return fileUploadCompleteMsg{true, "[SYS] File securely transmitted!"}
-			}
-			cmds = append(cmds, uploadCmd)
-		}
 	}
 
 	return m, tea.Batch(cmds...)

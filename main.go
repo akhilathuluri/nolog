@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/wish/scp"
+	"github.com/joho/godotenv"
 	
 	"secure-chat/manager"
 	"secure-chat/server"
@@ -27,15 +29,34 @@ const (
 func main() {
 	hub := manager.NewHub()
 
-	s, err := wish.NewServer(
-		wish.WithAddress(host+":"+port),
+	opts := []ssh.Option{
+		wish.WithAddress(host + ":" + port),
 		wish.WithHostKeyPath(".ssh/term_info_ed25519"),
 		wish.WithMiddleware(
 			bubbletea.Middleware(server.TeaHandler(hub)),
-			scp.Middleware(scp.NewFSReadHandler(server.HubFS{Hub: hub}), nil),
+			scp.Middleware(scp.NewFSReadHandler(server.HubFS{Hub: hub}), server.HubWriteHandler{Hub: hub}),
 			logging.Middleware(),
 		),
-	)
+	}
+
+	_ = godotenv.Load() // Load .env file if it exists, ignore if not
+
+	var cliPass string
+	flag.StringVar(&cliPass, "password", "", "Server password for SSH authentication")
+	flag.Parse()
+
+	expectedPass := cliPass
+	if expectedPass == "" {
+		expectedPass = os.Getenv("SECURE_CHAT_PASS")
+	}
+
+	if expectedPass != "" {
+		opts = append(opts, wish.WithPasswordAuth(func(ctx ssh.Context, password string) bool {
+			return password == expectedPass
+		}))
+	}
+
+	s, err := wish.NewServer(opts...)
 	if err != nil {
 		log.Fatalln("Could not start server", err)
 	}

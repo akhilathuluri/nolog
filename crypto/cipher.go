@@ -21,7 +21,7 @@ type CipherEngine struct {
 
 // NewCipherEngine creates a new cipher engine using the provided 32-byte symmetric key.
 func NewCipherEngine(key []byte) (*CipherEngine, error) {
-	aead, err := chacha20poly1305.New(key)
+	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ChaCha20-Poly1305: %w", err)
 	}
@@ -34,8 +34,11 @@ func (ce *CipherEngine) RatchetKey() {
 	kdf := hkdf.New(hash, ce.key, nil, []byte("ratchet"))
 	newKey := make([]byte, 32)
 	io.ReadFull(kdf, newKey)
+	for i := range ce.key {
+		ce.key[i] = 0 // Safely zero out the old key
+	}
 	ce.key = newKey
-	ce.aead, _ = chacha20poly1305.New(ce.key)
+	ce.aead, _ = chacha20poly1305.NewX(ce.key)
 }
 
 // Encrypt encrypts a plaintext byte slice.

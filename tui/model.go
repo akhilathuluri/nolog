@@ -5,7 +5,6 @@ import (
 	"secure-chat/manager"
 	"time"
 
-	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,7 +14,6 @@ type UIState int
 
 const (
 	StateChat UIState = iota
-	StateFilePicker
 	StateRoomJoin
 	StateAuthVerify
 )
@@ -31,7 +29,6 @@ type Model struct {
 
 	Timeline   viewport.Model
 	Input      textinput.Model
-	FilePicker filepicker.Model
 	
 	State       UIState
 	Messages    []string
@@ -46,6 +43,7 @@ type Model struct {
 }
 
 type peerMessageMsg []byte
+type fileUploadMsg []byte
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
@@ -64,21 +62,27 @@ func waitForMessage(sub chan []byte) tea.Cmd {
 	}
 }
 
+func waitForUpload(sub chan []byte) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-sub
+		if !ok {
+			return nil
+		}
+		return fileUploadMsg(msg)
+	}
+}
+
 func InitialModel(sess *manager.Session, hub *manager.Hub, id *crypto.Identity, initiator bool) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
+	ti.CharLimit = 4096
 	ti.Focus()
-
-	fp := filepicker.New()
-	fp.AllowedTypes = []string{} // Allow all files
-	fp.CurrentDirectory = "."
 
 	return Model{
 		Session:  sess,
 		Hub:      hub,
 		Identity: id,
 		Input:    ti,
-		FilePicker: fp,
 		State:    StateChat,
 		Messages: []string{"[SYS] Session initialized. Waiting for peer..."},
 		Initiator: initiator,
@@ -86,5 +90,5 @@ func InitialModel(sess *manager.Session, hub *manager.Hub, id *crypto.Identity, 
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.FilePicker.Init(), waitForMessage(m.Session.Incoming), tickCmd())
+	return tea.Batch(textinput.Blink, waitForMessage(m.Session.Incoming), waitForUpload(m.Session.Uploads), tickCmd())
 }

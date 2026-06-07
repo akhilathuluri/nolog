@@ -27,6 +27,7 @@ func TeaHandler(hub *manager.Hub) bubbletea.Handler {
 		go func() {
 			<-s.Context().Done()
 			hub.Unregister(id.UniqueID)
+			id.Wipe() // Zero out private keys when session ends
 		}()
 
 		// Check for target ID in arguments
