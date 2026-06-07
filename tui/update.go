@@ -13,6 +13,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	"github.com/aymanbagabas/go-osc52/v2"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mdp/qrterminal/v3"
 )
@@ -223,7 +224,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.Cipher = nil
 								m.Session.PeerID = ""
 							} else {
-								m.Messages = append(m.Messages, fmt.Sprintf("[SYS] Joined Room %s!", roomID))
+								m.Messages = append(m.Messages, "[SYS] Joined Room %s!", roomID)
 							}
 						} else {
 							m.Messages = append(m.Messages, "[SYS] Invalid Join Code (Key Length Error).")
@@ -240,6 +241,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.Spinner, cmd = m.Spinner.Update(msg)
+		return m, cmd
 
 	case tickMsg:
 		if m.Cipher != nil && m.RoomID == "" && m.Session.PeerID != "" {
@@ -370,6 +376,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForMessage(m.Session.Incoming)
 
 	case fileUploadMsg:
+		if m.Cipher == nil {
+			m.Messages = append(m.Messages, "[SYS] 🚨 Cannot upload: No secure connection established!")
+			if len(m.Messages) > 100 {
+				m.Messages = m.Messages[len(m.Messages)-100:]
+			}
+			m.Timeline.SetContent(strings.Join(m.Messages, "\n"))
+			m.Timeline.GotoBottom()
+			return m, waitForUpload(m.Session.Uploads)
+		}
+
 		cipherText, _ := m.Cipher.Encrypt([]byte(msg))
 		if m.RoomID != "" {
 			m.Hub.Broadcast(m.RoomID, m.Identity.UniqueID, cipherText)

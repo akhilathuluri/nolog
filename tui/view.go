@@ -3,33 +3,35 @@ package tui
 import (
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) View() string {
 	if m.Width == 0 {
-		return "Initializing..."
+		return "Initializing Cyber-Core..."
 	}
 
 	header := lipgloss.JoinHorizontal(lipgloss.Bottom,
-		StyleBrand.Render("🔒 STEALTH ENGINE"),
+		StyleBrand.Render(" ⚡ STEALTH ENGINE "),
 		" ",
-		StyleStatus.Render(fmt.Sprintf("Status: %s", func() string {
+		func() string {
 			if m.Session.PeerID != "" {
-				return "Connected"
+				return StyleStatusConnected.Render(fmt.Sprintf("STATUS: SECURE 🔒 (%s)", m.Session.PeerID))
 			}
-			return "Waiting for peer"
-		}())),
+			return StyleStatusWaiting.Render(fmt.Sprintf("AWAITING CONNECTION %s", m.Spinner.View()))
+		}(),
 	)
-	
-	headerBlock := StyleHeader.Width(m.Width - 2).Render(header)
 
 	var leftCol string
+	leftWidth := int(float64(m.Width)*0.68) - 2
+	leftHeight := m.Height - 6
+	
 	if m.State == StateChat || m.State == StateAuthVerify {
-		leftCol = StyleTimeline.Width(int(float64(m.Width)*0.70) - 2).Render(m.Timeline.View())
+		leftCol = RenderPanel("📜 Secure Timeline", m.Timeline.View(), leftWidth, leftHeight, ColorAccent)
 	} else if m.State == StateRoomJoin {
-		leftCol = StyleTimeline.Width(int(float64(m.Width)*0.70) - 2).Render("\n  Paste Join Code:\n  " + m.Input.View())
+		leftCol = RenderPanel("🔑 Room Matrix", "\n  PASTE MATRIX JOIN CODE:\n\n  " + m.Input.View(), leftWidth, leftHeight, ColorAccent)
 	}
 
 	var mem runtime.MemStats
@@ -45,36 +47,52 @@ func (m Model) View() string {
 		}
 	}
 
-	metrics := fmt.Sprintf("Volatile RAM: %.1f MB\nKey Ratchet:  #%04d\nLive Ping:    %s", ramMB, m.MessageCount, pingStr)
+	metrics := fmt.Sprintf("RAM:   %.1f MB\nROT:   #%04d\nPING:  %s", ramMB, m.MessageCount, pingStr)
 
-	var telemetry string
-	uploadCmd := fmt.Sprintf("scp -O -P 23234 <file> localhost:upload_%s", m.Identity.UniqueID)
+	uploadCmd := fmt.Sprintf("scp -P 23234 <file> localhost:upload_%s", m.Identity.UniqueID)
+	
+	var roomInfo string
 	if m.RoomID != "" {
-		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nRoom:\n%s\n\nCrypto: ChaCha20-Poly1305\n%s\n\nUpload File:\n%s\n\n[Ctrl+Q] Panic Exit\n[Ctrl+Y] Copy ID\n[Ctrl+U] Copy Upload\n[Ctrl+L] Leave Room",
-			m.Identity.UniqueID, m.RoomID, metrics, uploadCmd)
+		roomInfo = fmt.Sprintf("MODE: ROOM (%s)", m.RoomID)
 	} else {
-		telemetry = fmt.Sprintf("ID 📋:\n%s\n\nPeer:\n%s\n\nCrypto: ChaCha20-Poly1305\n%s\n\nUpload File:\n%s\n\n[Ctrl+Q] Panic Exit\n[Ctrl+Y] Copy ID\n[Ctrl+U] Copy Upload\n[Ctrl+R] Create Room\n[Ctrl+J] Join Room",
-			m.Identity.UniqueID, func() string {
-				if m.Session.PeerID != "" {
-					return m.Session.PeerID
-				}
-				return "Waiting for peer..."
-			}(), metrics, uploadCmd)
+		roomInfo = "MODE: PEER-TO-PEER"
 	}
 
+	rightWidth := int(float64(m.Width)*0.30) - 2
+	
+	identityContent := fmt.Sprintf("ID: %s\n%s", m.Identity.UniqueID, roomInfo)
+	telemetryContent := fmt.Sprintf("CRYPTO: XChaCha20-P1305\n%s", metrics)
+
+	shortcutsContent := "[Ctrl+Q] TERMINATE    [Ctrl+Y] COPY ID\n[Ctrl+U] COPY UPLOAD"
 	if m.PendingFile != "" {
-		telemetry += fmt.Sprintf("\n\nFile Ready:\n%s\n\n[Ctrl+D] Copy Download", m.PendingFile)
+		shortcutsContent += "  [Ctrl+D] COPY DOWNLOAD\n"
+	} else {
+		shortcutsContent += "\n"
 	}
-		
-	rightCol := StyleTelemetry.Width(int(float64(m.Width)*0.30) - 2).Render(telemetry)
+	if m.RoomID != "" {
+		shortcutsContent += "[Ctrl+L] LEAVE ROOM\n"
+	} else {
+		shortcutsContent += "[Ctrl+R] CREATE ROOM  [Ctrl+J] JOIN ROOM\n"
+	}
+	
+	uploadContent := "UPLOAD URL:\n" + uploadCmd
+	if m.PendingFile != "" {
+		uploadContent += fmt.Sprintf("\n\nDOWNLOAD URL:\n%s", m.PendingFile)
+	}
+
+	// Build the right column panels
+	idPanel := RenderPanel("🔑 Identity", identityContent, rightWidth, 4, ColorPrimary)
+	telPanel := RenderPanel("⚡ Telemetry", telemetryContent, rightWidth, 5, ColorSecondary)
+	cmdPanel := RenderPanel("⌨️ Commands", strings.TrimSpace(shortcutsContent), rightWidth, 5, ColorPrimary)
+	scpPanel := RenderPanel("🌐 Network SCP", uploadContent, rightWidth, 8, ColorSecondary)
+
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, idPanel, telPanel, cmdPanel, scpPanel)
 
 	var mainBody string
 	if m.Width < 80 {
-		// Stacked view
 		mainBody = lipgloss.JoinVertical(lipgloss.Left, leftCol, rightCol)
 	} else {
-		// Dual column
-		mainBody = lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
+		mainBody = lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "  ", rightCol)
 	}
 
 	prompt := StylePrompt.Render("💬 [SYS]: _ ")
@@ -83,7 +101,9 @@ func (m Model) View() string {
 	} else if m.State == StateAuthVerify {
 		prompt = StylePrompt.Render("🛡️ [VERIFY y/n]: _ ")
 	}
-	footer := StyleFooter.Render(lipgloss.JoinHorizontal(lipgloss.Left, prompt, m.Input.View()))
+	
+	footerContent := lipgloss.JoinHorizontal(lipgloss.Left, prompt, m.Input.View())
+	footerPanel := RenderPanel("💬 Terminal Input", footerContent, m.Width - 4, 3, ColorFaint)
 
-	return StyleRoot.Render(lipgloss.JoinVertical(lipgloss.Left, headerBlock, mainBody, footer))
+	return StyleRoot.Render(lipgloss.JoinVertical(lipgloss.Left, header, "", mainBody, footerPanel))
 }

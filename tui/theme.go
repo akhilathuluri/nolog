@@ -1,48 +1,67 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+	"github.com/charmbracelet/lipgloss"
+)
 
-// Theme tokens (Premium Cyber-Noir Theme)
+// Theme tokens (Gruvbox Dashboard Theme)
 var (
-	ColorPrimary   = lipgloss.Color("99")  // Purple/Violet
-	ColorSecondary = lipgloss.Color("86")  // Cyan/Teal
-	ColorFaint     = lipgloss.Color("237") // Dark Slate
-	ColorWarning   = lipgloss.Color("204") // Amber/Coral
+	ColorPrimary   = lipgloss.Color("#D79921") // Gruvbox Yellow/Gold
+	ColorSecondary = lipgloss.Color("#A89984") // Gruvbox Gray/Beige
+	ColorAccent    = lipgloss.Color("#E5C07B") // Muted Gold
+	ColorFaint     = lipgloss.Color("#504945") // Gruvbox Dark Gray
+	ColorText      = lipgloss.Color("#EBDBB2") // Gruvbox Light/Off-White
+	ColorWarning   = lipgloss.Color("#CC241D") // Gruvbox Red
 
-	StyleRoot = lipgloss.NewStyle().Padding(0, 1)
+	StyleRoot = lipgloss.NewStyle().Padding(1, 2).Foreground(ColorText)
 	
-	StyleHeader = lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(ColorFaint).
-		PaddingBottom(1).
-		MarginBottom(1)
-		
 	StyleBrand = lipgloss.NewStyle().
 		Background(ColorPrimary).
-		Foreground(lipgloss.Color("230")).
+		Foreground(lipgloss.Color("#282828")).
 		Bold(true).
-		Padding(0, 1)
+		Padding(0, 2).
+		MarginRight(2)
 
-	StyleStatus = lipgloss.NewStyle().Foreground(ColorSecondary)
-	
-	StyleTimeline = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
-		Padding(0, 1)
-		
-	StyleTelemetry = lipgloss.NewStyle().
-		Border(lipgloss.ThickBorder(), false, false, false, true).
-		BorderForeground(ColorFaint).
-		Padding(0, 1)
+	StyleStatusConnected = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true).Padding(0, 1)
+	StyleStatusWaiting   = lipgloss.NewStyle().Foreground(ColorPrimary).Italic(true).Padding(0, 1)
 
 	StyleMessagePeer = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
+		Foreground(ColorText).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(ColorSecondary).
 		PaddingLeft(1)
 
 	StyleMessageSys = lipgloss.NewStyle().Foreground(ColorWarning).Italic(true)
 
-	StyleFooter = lipgloss.NewStyle().MarginTop(1)
-	StylePrompt = lipgloss.NewStyle().Foreground(ColorSecondary).Bold(true)
+	StylePrompt = lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 )
+
+// RenderPanel simulates a dashboard pane with an embedded title like ╭─ 📜 Title ─╮
+func RenderPanel(title string, content string, width, height int, borderColor lipgloss.Color) string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder(), false, true, true, true).
+		BorderForeground(borderColor).
+		Width(width - 2). // Lipgloss width includes borders, but if we construct top line manually we must match widths. Wait, lipgloss Width sets the content width.
+		Height(height - 1).
+		Padding(0, 1).
+		Render(content)
+
+	innerWidth := width - 2
+	if innerWidth < 0 {
+		innerWidth = 0
+	}
+	
+	topBorderRunes := []rune(strings.Repeat("─", innerWidth))
+	titleStr := " " + title + " "
+	titleRunes := []rune(titleStr)
+	
+	if innerWidth > len(titleRunes)+2 {
+		copy(topBorderRunes[1:], titleRunes)
+	}
+
+	topLine := "╭" + string(topBorderRunes) + "╮"
+	topLine = lipgloss.NewStyle().Foreground(borderColor).Render(topLine)
+
+	return lipgloss.JoinVertical(lipgloss.Left, topLine, box)
+}

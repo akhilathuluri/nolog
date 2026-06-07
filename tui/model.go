@@ -5,7 +5,9 @@ import (
 	"secure-chat/manager"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -34,6 +36,7 @@ type Model struct {
 	Messages    []string
 	Initiator   bool
 	PendingFile string
+	Spinner     spinner.Model
 	
 	RoomID      string
 	RoomKey     []byte
@@ -78,6 +81,10 @@ func InitialModel(sess *manager.Session, hub *manager.Hub, id *crypto.Identity, 
 	ti.CharLimit = 4096
 	ti.Focus()
 
+	s := spinner.New()
+	s.Spinner = spinner.MiniDot
+	s.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
+
 	return Model{
 		Session:  sess,
 		Hub:      hub,
@@ -86,9 +93,10 @@ func InitialModel(sess *manager.Session, hub *manager.Hub, id *crypto.Identity, 
 		State:    StateChat,
 		Messages: []string{"[SYS] Session initialized. Waiting for peer..."},
 		Initiator: initiator,
+		Spinner:   s,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, waitForMessage(m.Session.Incoming), waitForUpload(m.Session.Uploads), tickCmd())
+	return tea.Batch(textinput.Blink, m.Spinner.Tick, waitForMessage(m.Session.Incoming), waitForUpload(m.Session.Uploads), tickCmd())
 }
