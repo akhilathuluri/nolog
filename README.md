@@ -1,190 +1,435 @@
-# 🔒 STEALTH ENGINE (Secure Chat)
+# nolog
 
-Stealth Engine is a high-performance, **Zero-Knowledge**, End-to-End Encrypted (E2EE) terminal chat application built in Go. It operates exclusively over SSH, meaning no custom client installation is required—users simply connect using their native SSH terminal.
+**Zero-knowledge, end-to-end encrypted terminal chat over SSH.**
 
-## ✨ Features
+nolog is a privacy-focused terminal chat platform that uses native SSH clients as the user interface. There are no custom desktop applications, browser clients, databases, or persistent chat histories. Users connect through standard SSH and establish cryptographically protected communication channels using modern end-to-end encryption.
 
-* **Zero-Client Architecture**: Connect using the native `ssh` command available on Mac, Linux, and Windows. No client binaries to download.
-* **Military-Grade Cryptography**: 
-  * **ChaCha20-Poly1305** Authenticated Encryption with Associated Data (AEAD).
-  * **X25519** Elliptic-Curve Diffie-Hellman Key Exchange.
-  * **Ed25519 Public-Key Signatures**: Cryptographic guarantees against Identity Spoofing.
-  * **Split TX/RX Session Keys**: Independent transmit and receive keys for flawless bidirectional synchronization.
-  * **Manual DH Rekey (Ctrl+K)**: True Post-Compromise Security. Instantly heal your session with a fresh Diffie-Hellman exchange.
-* **Man-In-The-Middle (MITM) Protection**: Out-of-band QR code fingerprint verification for 1-to-1 connections.
-* **Replay Attack Immunity**: Millisecond timestamp-based AAD sequence validation combined with a strictly tracked SHA-256 duplicate cache.
-* **Group Chat Rooms**: Fully decentralized, cryptographically secure 1-to-N broadcasting using 256-bit symmetric Room Keys.
-* **Secure File Sharing**: In-memory N-to-N file sharing over SCP using unpredictable, one-time cryptographic `Upload Tokens`. 
-* **Server Resource Hardening**: Strict global memory quotas (250MB), 1000 session caps, and active file limits to prevent DoS/OOM attacks.
-* **Encrypted Telemetry**: The server inherently blocks plaintext logging, encrypting all local telemetry into a binary file using a volatile, single-use ChaCha20-Poly1305 boot key.
-* **Anti-Forensics**: All chat history and files live exclusively in volatile RAM. No databases, no logs, no persistence.
-* **Flexible Authentication**: Native SSH password middleware to deter brute-force attacks, configurable via `.env`, flags, or environment variables.
+### Highlights
+
+* Zero-client architecture (native SSH only)
+* End-to-end encrypted messaging
+* X25519 key exchange
+* Ed25519 identity signatures
+* ChaCha20-Poly1305 authenticated encryption
+* QR-code fingerprint verification
+* Secure group rooms
+* Secure file sharing
+* RAM-only message routing
+* No chat history persistence
+* Optional password-protected access
+* Cross-platform (Windows, Linux, macOS)
 
 ---
 
-## 🚀 Getting Started
+## Why nolog?
 
-### 1. Build the Server
-Ensure you have Go 1.21+ installed on your system.
+Most secure messaging platforms require dedicated applications, accounts, databases, and centralized infrastructure.
+
+nolog takes a different approach:
+
+```text
+Native SSH Client
+        │
+        ▼
+   SSH Server
+        │
+        ▼
+ End-to-End Encryption
+        │
+        ▼
+  RAM-Only Routing
+```
+
+Users simply connect using:
+
 ```bash
-git clone https://github.com/yourusername/secure-chat.git
-cd secure-chat
+ssh -p 23234 your-server-ip
+```
+
+No client installation. No accounts. No message database.
+
+---
+
+## Features
+
+### End-to-End Encryption
+
+nolog establishes encrypted communication channels using:
+
+* X25519 Elliptic Curve Diffie-Hellman key exchange
+* Ed25519 digital signatures
+* ChaCha20-Poly1305 authenticated encryption (AEAD)
+
+The server acts only as a message router and does not possess users' private session keys.
+
+### QR-Based Identity Verification
+
+For direct conversations, participants verify each other's fingerprints using:
+
+* QR codes
+* Human-readable fingerprints
+
+This helps detect man-in-the-middle attacks when verification is performed through an independent communication channel.
+
+### Session Rekeying
+
+Users can initiate a fresh Diffie-Hellman exchange at any time using:
+
+```text
+Ctrl + K
+```
+
+This generates new session keys without restarting the conversation.
+
+### Secure Group Rooms
+
+Create temporary encrypted rooms protected by randomly generated 256-bit room keys.
+
+Features:
+
+* Cryptographically generated room keys
+* Shareable join codes
+* Memory-only room storage
+* Automatic expiration after 10 minutes
+
+### Secure File Sharing
+
+Files can be transferred through a custom SCP pipeline.
+
+Example upload:
+
+```bash
+scp -O -P 23234 myfile.zip localhost:upload_<YourUniqueID>
+```
+
+Features:
+
+* In-memory processing
+* End-to-end encrypted transfers
+* No persistent server-side storage
+* Automatic cleanup
+
+### Anti-Forensics Design
+
+nolog intentionally avoids persistent storage:
+
+* No databases
+* No message history
+* No persistent files
+* No user accounts
+
+All active communication data exists only in memory.
+
+### Encrypted Telemetry
+
+nolog minimizes operational logging and prevents plaintext telemetry storage.
+
+Administrative telemetry is encrypted using a temporary ChaCha20-Poly1305 key generated at server startup.
+
+A unique decryption key is displayed when the server boots. Store this key securely if you wish to inspect telemetry later.
+
+#### Reading Encrypted Logs
+
+Use the following command:
+
+```bash
+./nolog --read-logs <YOUR_64_CHARACTER_HEX_KEY>
+```
+
+Example:
+
+```bash
+./nolog --read-logs 6c2f9f2e7d4f0b6f8d4c7a2e9b1c3d4e5f6a7b8c9d0e1f23456789abcdef1234
+```
+
+The supplied key must match the telemetry encryption key generated during the server startup session.
+
+#### Properties
+
+- Telemetry is stored only in encrypted form.
+- Plaintext logs are never written to disk.
+- Each server boot generates a new encryption key.
+- Previous telemetry cannot be decrypted without the corresponding key.
+
+---
+
+## Security Model
+
+nolog is designed with the assumption that network infrastructure may be untrusted.
+
+### Security Goals
+
+nolog aims to provide:
+
+* End-to-end encrypted messaging
+* Confidential file transfers
+* Protection against passive network monitoring
+* Protection against server-side message inspection
+* Identity verification through fingerprint matching
+* Replay attack protections
+* Ephemeral in-memory communication
+
+### Replay Protection
+
+nolog includes replay-attack protections through:
+
+* Timestamp validation
+* Duplicate message detection
+* SHA-256 replay tracking
+
+### Resource Hardening
+
+Built-in safeguards include:
+
+* Global memory limits
+* Session limits
+* File transfer limits
+* Automatic cleanup mechanisms
+
+These controls help reduce abuse and resource exhaustion risks.
+
+---
+
+## Threat Model
+
+### Protects Against
+
+✅ Passive network interception
+
+✅ Server-side message inspection
+
+✅ Message replay attempts
+
+✅ Unauthorized room access without keys
+
+✅ Identity impersonation (when fingerprint verification is performed)
+
+### Does Not Protect Against
+
+❌ Compromised user devices
+
+❌ Keyloggers
+
+❌ Screen capture malware
+
+❌ Physical access attacks
+
+❌ Traffic analysis and metadata observation
+
+❌ Users who skip fingerprint verification
+
+---
+
+## Getting Started
+
+### Requirements
+
+* Go 1.21+
+* OpenSSH client
+
+### Clone Repository
+
+```bash
+git clone https://github.com/akhilathuluri/nolog.git
+cd nolog
+```
+
+### Build
+
+```bash
 go mod tidy
-go build -o secure-chat.exe
+go build -o nolog
 ```
 
-### 2. Start the Server
-By default, the server binds to `localhost:23234`. 
-If you want to protect your server against unauthorized connections, you can set a password. If a password is not set, the server operates openly and users will not be prompted for authentication.
+### Run
 
-You can set the password using three methods:
+Without password:
 
-**Method 1: Command-Line Flag (Highest Priority)**
 ```bash
-./secure-chat.exe -password "supersecret"
+./nolog
 ```
 
-**Method 2: Environment Variable**
+With password:
+
 ```bash
-SECURE_CHAT_PASS="supersecret" ./secure-chat.exe
+./nolog -password "supersecret"
 ```
 
-**Method 3: `.env` File**
-Create a `.env` file in the same directory as the executable:
+Environment variable:
+
+```bash
+SECURE_CHAT_PASS="supersecret" ./nolog
+```
+
+Or using a `.env` file:
+
 ```env
 SECURE_CHAT_PASS="supersecret"
 ```
-Then simply run `./secure-chat.exe`.
 
-### 3. Connect as a Client
-Users connect to the server using their native SSH client. If you set a password, they will be prompted for it.
+---
+
+## Connecting
+
+Connect using any SSH client:
+
 ```bash
 ssh -p 23234 localhost
 ```
 
+After connecting:
+
+1. Receive a temporary UniqueID.
+2. Exchange IDs with another user.
+3. Establish a secure session.
+4. Verify fingerprints.
+5. Start chatting.
+
 ---
 
-## 📖 Usage Guide
+## Group Rooms
 
-When you connect to the server, you will be assigned an ephemeral 8-character Base58 `UniqueID`. 
+### Create Room
 
-### 1-to-1 Encrypted Chat
-1. Ask your peer for their `UniqueID`.
-2. Type their `UniqueID` into your terminal and press `Enter`.
-3. The server will pair you, and your clients will execute an **X25519 Key Exchange**.
-4. **Security Verification**: Both terminals will display a QR Code and a Fingerprint. Scan the QR code or read the fingerprint to your peer over an out-of-band channel (e.g., a phone call).
-5. If the fingerprints match, press `Y` to establish the encrypted tunnel. If you press `N`, the application will instantly terminate to protect you from MITM attacks.
+```text
+Ctrl + R
+```
 
-### Secure Group Rooms
-1. Press `Ctrl+R` to generate a new Room. 
-2. The client will generate a massive 32-byte cryptographic `RoomKey` and bundle it into a **Join Code**.
-3. Press `Ctrl+Y` to copy the Join Code.
-4. Send the Join Code to your friends securely. 
-5. They press `Ctrl+J` and paste the Join Code.
-6. *Note: Rooms automatically expire and are wiped from the server's memory exactly 10 minutes after creation.*
+### Copy Join Code
 
-### Secure File Sharing (SCP Pipeline)
-Because the TUI runs on the server, we use a custom **SCP-to-TUI pipeline** to allow users to securely upload local files directly into the encrypted chat stream without ever touching the server's hard drive.
+```text
+Ctrl + Y
+```
 
-**To Send a File:**
-1. Check the right sidebar of your TUI for your personalized `Upload File` command.
-2. Open a *new, local terminal* on your computer.
-3. Run the SCP upload command, replacing `<file>` with your actual file path:
-   ```bash
-   scp -O -P 23234 my_picture.jpg localhost:upload_<YourUniqueID>
-   ```
-4. The server instantly intercepts the upload into RAM, encrypts it with ChaCha20-Poly1305, and broadcasts it into the chat room.
+### Join Room
 
-**To Receive a File:**
-1. When someone uploads a file, a download notification will appear in your chat.
-2. A personalized `scp download` command will appear on your right sidebar.
-3. Open a *new, local terminal* on your computer and run the command to securely download the decrypted file directly to your hard drive.
-4. *Note: Uploaded files are automatically purged from the server's memory after 10 minutes.*
+```text
+Ctrl + J
+```
 
-### Reading Encrypted Server Logs
-For maximum stealth, all server connection telemetry is stripped from standard output and encrypted into a binary `stealth.log` file using a volatile `ChaCha20-Poly1305` key printed uniquely upon each server boot. 
+Rooms automatically expire after 10 minutes.
 
-To decrypt and view these logs as an administrator, pass the printed 64-character hex key via the `--read-logs` flag:
+---
+
+## File Sharing
+
+### Upload
+
 ```bash
-./secure-chat.exe --read-logs <Your_64_Character_Hex_Key>
+scp -O -P 23234 myfile.jpg localhost:upload_<YourUniqueID>
+```
+
+### Download
+
+Use the generated SCP command displayed in the terminal interface.
+
+Uploaded files automatically expire after 10 minutes.
+
+---
+
+## Deployment
+
+### Linux Server
+
+Build:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o nolog
+```
+
+Upload:
+
+```bash
+scp nolog user@server:/usr/local/bin/
+```
+
+### systemd Service
+
+```ini
+[Unit]
+Description=nolog Secure Chat
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment="SECURE_CHAT_PASS=supersecret"
+ExecStart=/usr/local/bin/nolog
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable nolog
+sudo systemctl start nolog
+```
+
+### Docker
+
+Build:
+
+```bash
+docker build -t nolog .
+```
+
+Run:
+
+```bash
+docker run -d -p 23234:23234 -e SECURE_CHAT_PASS="supersecret" nolog
 ```
 
 ---
 
-## 🌍 Production Deployment
+## Performance Characteristics
 
-Stealth Engine is a lightweight Go binary, meaning it can be deployed almost anywhere with minimal overhead.
+* Lightweight Go binary
+* No database dependency
+* Low memory footprint
+* Concurrent connection handling
+* Minimal deployment requirements
 
-### 1. Deploying on a VPS (Linux / Ubuntu)
-The easiest way to host the server is to run it as a background service on a Virtual Private Server (VPS) like DigitalOcean, Linode, or AWS.
+Suitable for:
 
-1. Build the Linux binary:
-   ```bash
-   env GOOS=linux GOARCH=amd64 go build -o secure-chat
-   ```
-2. Upload the binary to your VPS:
-   ```bash
-   scp secure-chat user@your-vps-ip:/usr/local/bin/
-   ```
-3. Create a `systemd` service file `/etc/systemd/system/secure-chat.service`:
-   ```ini
-   [Unit]
-   Description=Stealth Engine Secure Chat
-   After=network.target
-
-   [Service]
-   Type=simple
-   User=root
-   Environment="SECURE_CHAT_PASS=supersecret"
-   ExecStart=/usr/local/bin/secure-chat
-   Restart=always
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-4. Start and enable the service:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable secure-chat
-   sudo systemctl start secure-chat
-   ```
-
-### 2. Deploying with Docker
-You can easily containerize the application to run it in the cloud.
-
-1. Create a simple `Dockerfile`:
-   ```dockerfile
-   FROM golang:1.21-alpine AS builder
-   WORKDIR /app
-   COPY . .
-   RUN go build -o secure-chat
-
-   FROM alpine:latest
-   WORKDIR /app
-   COPY --from=builder /app/secure-chat .
-   EXPOSE 23234
-   CMD ["./secure-chat"]
-   ```
-2. Build and run the image:
-   ```bash
-   docker build -t secure-chat .
-   docker run -d -p 23234:23234 -e SECURE_CHAT_PASS="supersecret" secure-chat
-   ```
-
-### Port Forwarding
-Ensure that port `23234` (or whatever port you bind to) is open on your server's firewall (e.g., `sudo ufw allow 23234/tcp`).
+* Self-hosted deployments
+* Private communities
+* Security research environments
+* Internal team communication
+* Temporary collaboration environments
 
 ---
 
-## 🛡️ Security Architecture
+## Security Status
 
-Stealth Engine is designed under the assumption that the server is compromised or malicious. 
+nolog uses widely adopted cryptographic primitives and secure communication patterns. However:
 
-1. **Zero-Knowledge Routing**: The server's `Hub` only routes `[]byte` arrays. It does not possess any private keys and cannot inspect or alter payloads.
-2. **Key Wiping**: Shared secrets and private keys are aggressively zeroed from memory the millisecond they are no longer needed.
-3. **Session Purging**: When a user disconnects or hits `Ctrl+Q` (Panic Exit), all their cipher engines, session pipes, and identities are instantly destroyed.
-4. **Encrypted Telemetry**: All standard stdout logging is completely blocked. Administrative logs are scrambled into binary ciphertext via a volatile key generated on boot.
-5. **Transport Layer Security**: The connection between the user's terminal and the server is encrypted via standard OpenSSH.
+* No independent third-party security audit has been completed.
+* Cryptographic implementations should not be considered formally verified.
+* Users should evaluate the software according to their own security requirements.
 
-### Disclaimer
-*This software is intended for educational purposes. While it implements industry-standard cryptography, it has not undergone a formal third-party security audit. Use at your own risk.*
+---
+
+## Roadmap
+
+* Automatic key rotation
+* Multi-device identity support
+* Optional Tor deployment guidance
+* External security review
+* Additional transport options
+* Enhanced metadata resistance
+
+---
+
+## License
+
+MIT License
+
+---
+
+## Disclaimer
+
+This project is provided for educational and research purposes. While it implements modern cryptographic techniques, no guarantee of security is provided. Users should conduct their own review before deploying it in sensitive environments.
